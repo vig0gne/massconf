@@ -1,0 +1,24 @@
+from scrapli.driver.core import IOSXEDriver, NXOSDriver
+import os
+
+# --- CONFIGURATION ---
+DRIVERS = [IOSXEDriver, NXOSDriver]
+COMMANDS_FILE = os.path.abspath('commands.txt')
+HOSTS_FILE = os.path.abspath('hosts.txt')
+LOG_FILE = os.path.abspath('messages.log')
+FAILED_FILE = os.path.abspath('failed.txt')
+### Путь до файла с настройками ssh
+SSH_CONFIG_FILE = os.path.abspath("ssh_config")
+### Количество потоков. При нестабильной работе, попробуйте уменьшить.
+THREADS = 30
+### Таймаут для выполнения операций
+TIMEOUT_OPS = 60
+### Таймаут на открытие сокета
+TIMEOUT_SOCKET = 20
+### Таймаут на саму SSH сессию
+TIMEOUT_TRANSPORT = 30
+### Подробный дебаг scrapli. Если нужен, ставим True
+SCRAPLI_DEBUG = False
+### Если необходимо как-то анализировать выводимую информацию, задаем ANALYZER_MODULE = имени модуля.
+### Анализатор пишем в отдельно в папке analyzer_modules
+ANALYZER_MODULE = ""
