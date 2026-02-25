@@ -74,9 +74,10 @@ if SCRAPLI_DEBUG:
     scrapli_logger.addHandler(scrapli_file)
 
 
-def execute_logic(conn, commands_to_run: list[str]) -> str:
+def execute_logic(conn, commands_to_run: list[str]) -> tuple[str, bool]:
     """Внутренняя логика выполнения команд на открытом соединении"""
     full_result = ""
+    config_changed = False
     for cmd in commands_to_run:
         if not cmd.strip():
             continue
@@ -90,6 +91,7 @@ def execute_logic(conn, commands_to_run: list[str]) -> str:
                                         interaction_complete_patterns=[prompt]
                                         ).result
             full_result += f"{res}\n"
+            config_changed = True
 
         # Интерактив: copy
         elif cmd.startswith("copy"):
@@ -101,7 +103,6 @@ def execute_logic(conn, commands_to_run: list[str]) -> str:
 
         # Обычные команды show/wr
         elif cmd.startswith(PRIV_CMDS):
-            conn.send_command("terminal length 0")
             res = conn.send_command(cmd).result
             full_result += f"{res}\n"
 
@@ -111,8 +112,9 @@ def execute_logic(conn, commands_to_run: list[str]) -> str:
                                    strip_prompt=False,
                                     privilege_level="configuration").result
             full_result += f"{cmd}\n{res}\n"
+            config_changed = True
 
-    return full_result
+    return full_result, config_changed
 
 
 def load_analyzer(module_name: str):
@@ -147,6 +149,42 @@ class DeviceManager:
         else:
             self.analyzer = lambda host, output: []
 
+    def _prepare_session(self, conn, driver_class):
+        """
+        Выполняется один раз после подключения.
+        Отключает пагинацию в зависимости от платформы.
+        """
+        driver_name = driver_class.__name__
+
+        try:
+            if driver_name == "ASADriver":
+                conn.send_command("terminal pager 0")
+            else:
+                # IOS / IOS-XE / NX-OS
+                conn.send_command("terminal length 0")
+                # Для NX-OS дополнительно
+                conn.send_command("terminal width 511")
+                # Удостоверяемся, что мы в привилегированном режиме
+                conn.acquire_priv("privilege_exec")
+
+        except Exception as e:
+            logger.debug(f"{self.host}: session preparation failed: {e}")
+
+    def _save_config(self, conn, driver_class):
+        try:
+            driver_name = driver_class.__name__
+
+            if driver_name == "NXOSDriver":
+                conn.send_command("copy running-config startup-config")
+            elif driver_name == "ASADriver":
+                conn.send_command("write memory")
+            else:
+                conn.send_command("write memory")
+
+            logger.info(f"{self.host}: Configuration saved")
+
+        except Exception as e:
+            logger.warning(f"{self.host}: Failed to save config: {e}")
 
     def run(self):
         """Попытка подключения с перебором драйверов"""
@@ -157,15 +195,19 @@ class DeviceManager:
                 # Используем контекстный менеджер для каждого драйвера
                 with driver_class(**self.device_dict) as conn:
                     logger.info(f"Connected to {self.host} using {driver_class.__name__}")
-                    output = execute_logic(conn, self.commands)
+                    self._prepare_session(conn, driver_class)
+                    output, config_changed = execute_logic(conn, self.commands)
                     if self.analyze:
                         fix_commands = self.analyzer(self.host, output)
                         if fix_commands:
                             logger.info(f"{self.host}: Analyzer generated {len(fix_commands)} commands")
-                            fix_output = execute_logic(conn, fix_commands)
+                            fix_output, fix_changed = execute_logic(conn, fix_commands)
                             output += "\n--- ANALYZER FIX ---\n" + fix_output
+                            config_changed = config_changed or fix_changed
 
                     logger.info(f"SUCCESS: {self.host}\n{output}")
+                    if config_changed:
+                        self._save_config(conn, driver_class)
                     return
 
             except ScrapliAuthenticationFailed:
